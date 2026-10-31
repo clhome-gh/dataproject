@@ -483,19 +483,54 @@ with tabs[3]:
                     err_fig.update_layout(template="plotly_white", height=390, xaxis_title="모델", yaxis_title="오차 (km/h)", barmode="group", bargroupgap=0.12)
                     st.plotly_chart(err_fig, use_container_width=True)
 
-                    selected_reg = st.selectbox("실제값과 예측값을 비교할 모델", list(regression_predictions.keys()),
-                                                index=list(regression_predictions.keys()).index(best_reg_name), key="reg_compare_model")
-                    pred_df = pd.DataFrame({"실제 평균속도": y_test.to_numpy(),
-                                            "예측 평균속도": regression_predictions[selected_reg]})
-                    pred_fig = px.scatter(pred_df, x="실제 평균속도", y="예측 평균속도",
-                                          title=f"{selected_reg}: 실제값과 예측값 비교",
-                                          opacity=0.35)
-                    low = float(min(pred_df.min().min(), 0))
-                    high = float(pred_df.max().max())
-                    pred_fig.add_trace(go.Scatter(x=[low, high], y=[low, high], mode="lines",
-                                                  name="완벽한 예측 기준선", line=dict(dash="dash", color="#e78b52")))
-                    pred_fig.update_layout(template="plotly_white", height=430)
-                    st.plotly_chart(pred_fig, use_container_width=True)
+                    # 모든 모델을 한 화면에서 비교: 테스트 날짜의 시간대별 실제 평균과 예측 평균을 작은 그래프들로 표시
+                    from plotly.subplots import make_subplots
+                    st.markdown("#### 모든 모델의 시간대별 예측 비교")
+                    st.caption("각 그래프에서 진한 선은 실제 평균속도, 점선은 해당 모델의 예측 평균속도입니다. 모델을 선택하지 않아도 한 화면에서 비교할 수 있어요.")
+                    compare_frames = []
+                    for model_name, model_pred in regression_predictions.items():
+                        one = pd.DataFrame({
+                            "시간": test_df["_시"].astype(int).to_numpy(),
+                            "실제 평균속도": y_test.to_numpy(),
+                            "예측 평균속도": np.asarray(model_pred, dtype=float)
+                        })
+                        hourly = one.groupby("시간", as_index=False).agg(
+                            실제평균=("실제 평균속도", "mean"),
+                            예측평균=("예측 평균속도", "mean")
+                        )
+                        compare_frames.append((model_name, hourly))
+
+                    n_models = len(compare_frames)
+                    n_cols = 2
+                    n_rows = int(np.ceil(n_models / n_cols))
+                    subplot_titles = [name for name, _ in compare_frames]
+                    compare_fig = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=subplot_titles,
+                                                shared_xaxes=True, vertical_spacing=0.13, horizontal_spacing=0.10)
+                    for idx, (model_name, hourly) in enumerate(compare_frames):
+                        rr, cc = idx // n_cols + 1, idx % n_cols + 1
+                        compare_fig.add_trace(go.Scatter(
+                            x=hourly["시간"], y=hourly["실제평균"], mode="lines+markers",
+                            name="실제 평균속도", legendgroup="actual", showlegend=(idx == 0),
+                            line=dict(color="#173f67", width=3), marker=dict(size=6)
+                        ), row=rr, col=cc)
+                        compare_fig.add_trace(go.Scatter(
+                            x=hourly["시간"], y=hourly["예측평균"], mode="lines+markers",
+                            name="예측 평균속도", legendgroup="pred", showlegend=(idx == 0),
+                            line=dict(color="#e28b42", width=2.5, dash="dash"), marker=dict(size=5)
+                        ), row=rr, col=cc)
+                        compare_fig.update_xaxes(title_text="시간 (시)", dtick=2, row=rr, col=cc)
+                        compare_fig.update_yaxes(title_text="평균속도", row=rr, col=cc)
+                    compare_fig.update_layout(
+                        template="plotly_white", height=max(680, n_rows * 300),
+                        title="회귀 모델별 실제값과 예측값의 시간대별 변화",
+                        margin=dict(t=90, b=35), hovermode="x unified",
+                        legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center")
+                    )
+                    st.plotly_chart(compare_fig, use_container_width=True)
+                    st.download_button("⬇️ 회귀 모델 성능 비교 CSV 저장",
+                                       reg_results.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                                       "회귀모델_성능비교.csv", "text/csv")
+                    st.caption("R²는 높을수록, MAE와 RMSE는 낮을수록 좋아요. 각 그래프는 테스트 날짜의 시간대별 평균을 나타내며, 날짜가 3일뿐이므로 장기 예측 성능을 보장하지 않아요.")
                     st.download_button("⬇️ 회귀 모델 성능 비교 CSV 저장",
                                        reg_results.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
                                        "회귀모델_성능비교.csv", "text/csv")
