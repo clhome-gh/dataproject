@@ -42,8 +42,8 @@ div[data-testid="stTabs"] button {font-weight:700;}
 
 st.markdown("""
 <div class="hero">
-  <h1>🚦 도로 소통정보 분석실</h1>
-  <p>1시간 단위 도로 속도 데이터를 직접 살펴보고, 시간대별 차이부터 회귀·군집 분석까지 해보는 데이터 탐험 공간</p>
+    <h1>🚦 도로 소통정보 분석실</h1>
+    <p>1시간 단위 도로 속도 데이터를 직접 살펴보고, 시간대별 차이부터 회귀·군집 분석까지 해보는 데이터 탐험 공간</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -72,22 +72,6 @@ def guess_col(cols, keywords):
         if score:
             scored.append((score, c))
     return sorted(scored, reverse=True, key=lambda x: x[0])[0][1] if scored else None
-
-def parse_hour(value):
-    s = str(value).strip()
-    # '~1시', '01시', '1:00', '2026-10-20 01:00:00' 등의 형식 지원
-    m = re.search(r"(?:~\s*)?(\d{1,2})\s*시", s)
-    if m:
-        h = int(m.group(1))
-        return 0 if h == 24 else h
-    m = re.search(r"(\d{1,2})\s*:\s*\d{2}", s)
-    if m:
-        return int(m.group(1))
-    try:
-        dt = pd.to_datetime(s, errors="raise")
-        return int(dt.hour)
-    except Exception:
-        return np.nan
 
 def numericize(series):
     if pd.api.types.is_numeric_dtype(series):
@@ -140,7 +124,6 @@ def choose(label, guess, allow_none=True):
 
 road_col = choose("도로명 컬럼", road_guess)
 date_col = choose("날짜 컬럼", date_guess)
-# 이 데이터 파일은 B열(두 번째 열)에 1~24의 시간코드가 들어 있음
 if len(raw_df.columns) >= 2:
     time_col = raw_df.columns[1]
     st.sidebar.caption(f"시간 코드: B열 · {time_col} (1~24)")
@@ -161,7 +144,6 @@ if df.empty:
     st.stop()
 
 if date_col:
-    # YYYYMMDD 숫자형 날짜와 일반 날짜 문자열을 모두 처리
     date_values = df[date_col]
     if pd.api.types.is_numeric_dtype(date_values):
         date_text = date_values.astype("Int64").astype(str)
@@ -176,14 +158,11 @@ if date_col:
 else:
     df["_날짜"] = pd.NaT
 
-# B열 시간코드 1~24를 실제 시간 0~23시로 변환
-# 예: 코드 1 = 00~01시, 코드 24 = 23~24시
 df["_시간코드"] = pd.to_numeric(df[time_col], errors="coerce")
 valid_time_code = df["_시간코드"].between(1, 24, inclusive="both")
 df["_시"] = np.where(valid_time_code, df["_시간코드"] - 1, np.nan)
 df["_시"] = pd.to_numeric(df["_시"], errors="coerce")
 
-# 시간 구간은 시간 값에 따라 자동 분류
 def time_group(h):
     if pd.isna(h): return "시간 정보 없음"
     h = int(h) % 24
@@ -198,7 +177,6 @@ df["_도로명"] = df[road_col].astype(str) if road_col else "도로명 정보 �
 df["_도로유형"] = df[type_col].astype(str) if type_col else "도로 유형 정보 없음"
 df["_방향"] = df[direction_col].astype(str) if direction_col else "방향 정보 없음"
 
-# 시간 값이 ~1시처럼 끝나는 시간 표시라면 24시는 0시로 처리됨. 앱 내 안내를 표시
 st.markdown(f'<span class="pill">시간 코드: B열 · {time_col}</span><span class="pill">속도 컬럼: {speed_col}</span><span class="pill">유효 시간 코드: {int(valid_time_code.sum()):,}개</span><span class="pill">유효 속도 데이터: {len(df):,}개</span>', unsafe_allow_html=True)
 
 # -------------------- 필터 --------------------
@@ -256,7 +234,7 @@ with tabs[0]:
         })
         stats_df = stats.to_frame("속도").round(3)
         st.dataframe(stats_df, use_container_width=True)
-        st.download_button("⬇️ 기초통계 CSV 저장", stats_df.to_csv(encoding="utf-8-sig").encode("utf-8-sig"), "기초통계.csv", "text/csv")
+        st.download_button("⬇️ 기초통계 CSV 저장", stats_df.to_csv(encoding="utf-8-sig").encode("utf-8-sig"), "기초통계.csv", "text/csv", key="btn_stats")
         q1, q3 = view["_속도"].quantile([.25,.75])
         st.write(f"**중간 50%의 범위(IQR)**: {q1:.2f} ~ {q3:.2f} (폭 {q3-q1:.2f})")
         if mean_v > median_v:
@@ -321,10 +299,10 @@ with tabs[2]:
     st.subheader("도로별 속도 비교")
     if road_col:
         road_summary = view.groupby("_도로명")["_속도"].agg(평균="mean", 중앙값="median", 기록수="count", 표준편차="std").reset_index()
-        min_n = st.slider("도로별 비교에 포함할 최소 기록 수", 1, max(2, int(road_summary["기록수"].max())), min(10, int(road_summary["기록수"].max())))
+        min_n = st.slider("도로별 비교에 포함할 최소 기록 수", 1, max(2, int(road_summary["기록수"].max())), min(10, int(road_summary["기록수"].max())), key="slider_min_n")
         road_summary = road_summary[road_summary["기록수"] >= min_n].sort_values("평균", ascending=False)
         if len(road_summary):
-            top_n = st.slider("표시할 도로 수", 5, min(50, len(road_summary)) if len(road_summary) >= 5 else len(road_summary), min(20, len(road_summary)))
+            top_n = st.slider("표시할 도로 수", 5, min(50, len(road_summary)) if len(road_summary) >= 5 else len(road_summary), min(20, len(road_summary)), key="slider_top_n")
             low = road_summary.nsmallest(top_n, "평균").sort_values("평균")
             high = road_summary.nlargest(top_n, "평균").sort_values("평균", ascending=False)
             a,b = st.columns(2)
@@ -339,7 +317,7 @@ with tabs[2]:
                 fig.update_layout(template="plotly_white", height=max(400, top_n*24), yaxis_title="", coloraxis_showscale=False)
                 st.plotly_chart(fig, use_container_width=True)
             st.dataframe(road_summary.sort_values("평균", ascending=False).round(2), use_container_width=True, hide_index=True)
-            st.download_button("⬇️ 도로별 통계 저장", road_summary.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"), "도로별_속도통계.csv", "text/csv")
+            st.download_button("⬇️ 도로별 통계 저장", road_summary.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"), "도로별_속도통계.csv", "text/csv", key="btn_road_stats")
         else:
             st.info("최소 기록 수 조건에 맞는 도로가 없어요.")
     else:
@@ -366,9 +344,9 @@ with tabs[3]:
         from sklearn.linear_model import LinearRegression, Ridge, Lasso, LogisticRegression
         from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
         from sklearn.metrics import (r2_score, mean_absolute_error, mean_squared_error,
-                                     accuracy_score, precision_score, recall_score,
-                                     f1_score, roc_auc_score, confusion_matrix)
-        from sklearn.base import clone
+                                   accuracy_score, precision_score, recall_score,
+                                   f1_score, roc_auc_score, confusion_matrix)
+        from plotly.subplots import make_subplots
 
         model_df = view.dropna(subset=["_시", "_속도"]).copy()
         model_df["_시"] = pd.to_numeric(model_df["_시"], errors="coerce")
@@ -380,7 +358,6 @@ with tabs[3]:
         if len(model_df) < 30:
             st.warning("모델 분석에는 유효한 데이터가 최소 30개 이상 필요해요.")
         else:
-            # 마지막 날짜를 테스트 데이터로 사용해 이후 날짜 예측 상황을 모의
             available_dates = sorted(model_df["_날짜문자"].dropna().unique().tolist())
             if len(available_dates) >= 2:
                 test_date = available_dates[-1]
@@ -388,7 +365,6 @@ with tabs[3]:
                 test_df = model_df[model_df["_날짜문자"] == test_date].copy()
                 split_label = f"학습: {', '.join(available_dates[:-1])} / 테스트: {test_date}"
             else:
-                # 날짜가 없거나 하루뿐이면 시간순 80:20 분할
                 model_df = model_df.sort_values("_시")
                 cut = int(len(model_df) * 0.8)
                 train_df, test_df = model_df.iloc[:cut].copy(), model_df.iloc[cut:].copy()
@@ -398,7 +374,6 @@ with tabs[3]:
             if len(train_df) < 10 or len(test_df) < 5:
                 st.warning("학습 또는 테스트 데이터가 부족해요. 필터 조건을 넓혀 주세요.")
             else:
-                # 숫자·범주형 설명변수 구성
                 numeric_features = ["_시"]
                 categorical_features = ["_도로유형", "_방향"]
                 if road_col:
@@ -420,240 +395,4 @@ with tabs[3]:
                     ])
                     return ColumnTransformer([
                         ("num", numeric_pipe, numeric_features),
-                        ("cat", categorical_pipe, categorical_features)
-                    ])
-
-                # 다항회귀는 시간 변수에만 2차항을 적용하고 범주형 변수는 원-핫 인코딩
-                def make_poly_preprocessor():
-                    num_pipe = Pipeline([
-                        ("imputer", SimpleImputer(strategy="median")),
-                        ("poly", PolynomialFeatures(degree=2, include_bias=False)),
-                        ("scaler", StandardScaler())
-                    ])
-                    cat_pipe = Pipeline([
-                        ("imputer", SimpleImputer(strategy="most_frequent")),
-                        ("onehot", OneHotEncoder(handle_unknown="ignore"))
-                    ])
-                    return ColumnTransformer([
-                        ("num", num_pipe, numeric_features),
-                        ("cat", cat_pipe, categorical_features)
-                    ])
-
-                regression_models = {
-                    "선형회귀": Pipeline([("prep", make_preprocessor()), ("model", LinearRegression())]),
-                    "2차 다항회귀": Pipeline([("prep", make_poly_preprocessor()), ("model", LinearRegression())]),
-                    "릿지 회귀": Pipeline([("prep", make_preprocessor()), ("model", Ridge(alpha=1.0))]),
-                    "라쏘 회귀": Pipeline([("prep", make_preprocessor()), ("model", Lasso(alpha=0.05, max_iter=5000))]),
-                    "랜덤 포레스트 회귀": Pipeline([("prep", make_preprocessor(scale_numeric=False)),
-                                             ("model", RandomForestRegressor(n_estimators=120, min_samples_leaf=3,
-                                                                              random_state=42, n_jobs=-1))])
-                }
-
-                st.markdown("### ① 평균속도 예측: 회귀 모델 비교")
-                st.caption("종속변수는 평균속도이며, 시간·도로 유형·방향·도로명을 이용해 테스트 날짜의 속도를 예측합니다.")
-                regression_rows = []
-                regression_predictions = {}
-                for name, pipe in regression_models.items():
-                    try:
-                        pipe.fit(X_train, y_train)
-                        pred = pipe.predict(X_test)
-                        regression_predictions[name] = pred
-                        regression_rows.append({
-                            "모델": name,
-                            "R²": r2_score(y_test, pred),
-                            "MAE": mean_absolute_error(y_test, pred),
-                            "RMSE": float(np.sqrt(mean_squared_error(y_test, pred)))
-                        })
-                    except Exception as model_error:
-                        st.warning(f"{name} 실행 중 오류: {model_error}")
-
-                if regression_rows:
-                    reg_results = pd.DataFrame(regression_rows).sort_values("RMSE")
-                    best_reg_name = str(reg_results.iloc[0]["모델"])
-                    best_reg = reg_results.iloc[0]
-                    a,b,c = st.columns(3)
-                    a.metric("RMSE가 가장 낮은 모델", best_reg_name)
-                    b.metric("최고 모델 MAE", f"{best_reg['MAE']:.2f}")
-                    c.metric("최고 모델 R²", f"{best_reg['R²']:.3f}")
-                    st.dataframe(reg_results.round(4), use_container_width=True, hide_index=True)
-                    metric_long = reg_results.melt(id_vars="모델", value_vars=["MAE", "RMSE"],
-                                                   var_name="평가지표", value_name="오차")
-                    err_fig = px.bar(metric_long, x="모델", y="오차", color="평가지표", barmode="group",
-                                     title="회귀 모델별 예측 오차 비교")
-                    err_fig.update_layout(template="plotly_white", height=390, xaxis_title="모델", yaxis_title="오차 (km/h)", barmode="group", bargroupgap=0.12)
-                    st.plotly_chart(err_fig, use_container_width=True)
-
-                    # 모든 모델을 한 화면에서 비교: 테스트 날짜의 시간대별 실제 평균과 예측 평균을 작은 그래프들로 표시
-                    from plotly.subplots import make_subplots
-                    st.markdown("#### 모든 모델의 시간대별 예측 비교")
-                    st.caption("각 그래프에서 진한 선은 실제 평균속도, 점선은 해당 모델의 예측 평균속도입니다. 모델을 선택하지 않아도 한 화면에서 비교할 수 있어요.")
-                    compare_frames = []
-                    for model_name, model_pred in regression_predictions.items():
-                        one = pd.DataFrame({
-                            "시간": test_df["_시"].astype(int).to_numpy(),
-                            "실제 평균속도": y_test.to_numpy(),
-                            "예측 평균속도": np.asarray(model_pred, dtype=float)
-                        })
-                        hourly = one.groupby("시간", as_index=False).agg(
-                            실제평균=("실제 평균속도", "mean"),
-                            예측평균=("예측 평균속도", "mean")
-                        )
-                        compare_frames.append((model_name, hourly))
-
-                    n_models = len(compare_frames)
-                    n_cols = 2
-                    n_rows = int(np.ceil(n_models / n_cols))
-                    subplot_titles = [name for name, _ in compare_frames]
-                    compare_fig = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=subplot_titles,
-                                                shared_xaxes=True, vertical_spacing=0.13, horizontal_spacing=0.10)
-                    for idx, (model_name, hourly) in enumerate(compare_frames):
-                        rr, cc = idx // n_cols + 1, idx % n_cols + 1
-                        compare_fig.add_trace(go.Scatter(
-                            x=hourly["시간"], y=hourly["실제평균"], mode="lines+markers",
-                            name="실제 평균속도", legendgroup="actual", showlegend=(idx == 0),
-                            line=dict(color="#173f67", width=3), marker=dict(size=6)
-                        ), row=rr, col=cc)
-                        compare_fig.add_trace(go.Scatter(
-                            x=hourly["시간"], y=hourly["예측평균"], mode="lines+markers",
-                            name="예측 평균속도", legendgroup="pred", showlegend=(idx == 0),
-                            line=dict(color="#e28b42", width=2.5, dash="dash"), marker=dict(size=5)
-                        ), row=rr, col=cc)
-                        compare_fig.update_xaxes(title_text="시간 (시)", dtick=2, row=rr, col=cc)
-                        compare_fig.update_yaxes(title_text="평균속도", row=rr, col=cc)
-                    compare_fig.update_layout(
-                        template="plotly_white", height=max(680, n_rows * 300),
-                        title="회귀 모델별 실제값과 예측값의 시간대별 변화",
-                        margin=dict(t=90, b=35), hovermode="x unified",
-                        legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center")
-                    )
-                    st.plotly_chart(compare_fig, use_container_width=True)
-                    st.download_button("⬇️ 회귀 모델 성능 비교 CSV 저장",
-                                       reg_results.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
-                                       "회귀모델_성능비교.csv", "text/csv")
-                    st.caption("R²는 높을수록, MAE와 RMSE는 낮을수록 좋아요. 각 그래프는 테스트 날짜의 시간대별 평균을 나타내며, 날짜가 3일뿐이므로 장기 예측 성능을 보장하지 않아요.")
-                    st.download_button("⬇️ 회귀 모델 성능 비교 CSV 저장",
-                                       reg_results.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
-                                       "회귀모델_성능비교.csv", "text/csv")
-                    st.caption("R²는 높을수록, MAE와 RMSE는 낮을수록 좋아요. 서로 다른 날짜를 테스트했으므로 점수는 해당 데이터 기간에 대한 결과이며 장기 예측 성능을 보장하지 않아요.")
-
-                st.markdown("---")
-                st.markdown("### ② 혼잡 여부 분류: 로지스틱 회귀")
-                st.caption("평균속도 자체가 아니라 설정한 기준보다 느린 도로를 혼잡으로 분류합니다.")
-                threshold = st.slider("혼잡 판정 기준 속도 (km/h 미만이면 혼잡)", 5, 40, 20, 1, key="logistic_threshold")
-                y_train_cls = (y_train < threshold).astype(int)
-                y_test_cls = (y_test < threshold).astype(int)
-                if y_train_cls.nunique() < 2 or y_test_cls.nunique() < 2:
-                    st.warning("현재 분할에서는 혼잡 또는 비혼잡 중 한 종류만 있어 로지스틱 회귀 성능을 계산할 수 없어요.")
-                else:
-                    logistic_pipe = Pipeline([
-                        ("prep", make_preprocessor()),
-                        ("model", LogisticRegression(max_iter=1500, class_weight="balanced"))
-                    ])
-                    logistic_pipe.fit(X_train, y_train_cls)
-                    cls_pred = logistic_pipe.predict(X_test)
-                    cls_prob = logistic_pipe.predict_proba(X_test)[:, 1]
-                    cls_acc = accuracy_score(y_test_cls, cls_pred)
-                    cls_precision = precision_score(y_test_cls, cls_pred, zero_division=0)
-                    cls_recall = recall_score(y_test_cls, cls_pred, zero_division=0)
-                    cls_f1 = f1_score(y_test_cls, cls_pred, zero_division=0)
-                    try:
-                        cls_auc = roc_auc_score(y_test_cls, cls_prob)
-                    except ValueError:
-                        cls_auc = np.nan
-                    c1,c2,c3,c4,c5 = st.columns(5)
-                    c1.metric("정확도", f"{cls_acc:.3f}")
-                    c2.metric("정밀도", f"{cls_precision:.3f}")
-                    c3.metric("재현율", f"{cls_recall:.3f}")
-                    c4.metric("F1 점수", f"{cls_f1:.3f}")
-                    c5.metric("AUC", f"{cls_auc:.3f}" if pd.notna(cls_auc) else "계산 불가")
-                    cm = confusion_matrix(y_test_cls, cls_pred, labels=[0,1])
-                    cm_df = pd.DataFrame(cm, index=["실제 비혼잡", "실제 혼잡"], columns=["예측 비혼잡", "예측 혼잡"])
-                    st.markdown("#### 혼동행렬")
-                    st.dataframe(cm_df, use_container_width=True)
-                    st.caption("정밀도는 혼잡이라고 예측한 기록 중 실제 혼잡 비율, 재현율은 실제 혼잡 기록 중 모델이 찾아낸 비율이에요.")
-                    cls_summary = pd.DataFrame([{
-                        "혼잡 기준(km/h)": threshold, "정확도": cls_acc, "정밀도": cls_precision,
-                        "재현율": cls_recall, "F1": cls_f1, "AUC": cls_auc
-                    }])
-                    st.download_button("⬇️ 로지스틱 회귀 결과 CSV 저장",
-                                       cls_summary.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
-                                       "로지스틱회귀_성능.csv", "text/csv")
-
-                st.markdown("---")
-                st.markdown("### ③ 분석할 때 주의할 점")
-                st.info("혼잡 기준 속도는 분석자가 정한 값이며 공식 혼잡 판정 기준과 다를 수 있어요. 도로명은 기존 도로의 특성을 학습하는 데 도움이 되지만, 학습에 없던 새로운 도로에 대한 예측에는 그대로 적용하기 어려울 수 있습니다. 또한 현재 데이터는 3일 자료이므로 결과를 장기적인 서울 교통 패턴으로 일반화하지 마세요.")
-
-    except ImportError as e:
-        st.error("회귀·분류 분석에는 scikit-learn이 필요해요. requirements.txt에 scikit-learn을 추가한 뒤 다시 배포해 주세요.")
-
-# -------------------- 탭 5 군집 --------------------
-with tabs[4]:
-    st.subheader("🧩 군집 분석: 비슷한 도로끼리 묶어 보기")
-    st.markdown('<div class="section-note">군집 분석은 정답 라벨 없이 특징이 비슷한 대상을 자동으로 묶어요. 여기서는 도로별 평균 속도·중앙값·속도 변동을 이용해 비슷한 속도 특성을 가진 도로 그룹을 찾아요.</div>', unsafe_allow_html=True)
-    try:
-        from sklearn.cluster import KMeans
-        from sklearn.preprocessing import StandardScaler
-        from sklearn.decomposition import PCA
-        if not road_col:
-            st.warning("도로명 컬럼을 선택해야 도로별 군집을 만들 수 있어요.")
-        else:
-            cluster_base = view.groupby("_도로명").agg(
-                평균속도=("_속도","mean"),
-                중앙속도=("_속도","median"),
-                속도표준편차=("_속도","std"),
-                기록수=("_속도","count")
-            ).reset_index().fillna(0)
-            cluster_base = cluster_base[cluster_base["기록수"] >= 2].copy()
-            if len(cluster_base) < 3:
-                st.warning("군집 분석에는 기록이 있는 도로가 최소 3개 이상 필요해요.")
-            else:
-                k = st.slider("군집 수 (K)", 2, min(8, len(cluster_base)-1), min(3, len(cluster_base)-1), key="cluster_k")
-                features = ["평균속도","중앙속도","속도표준편차"]
-                scaler = StandardScaler()
-                X = scaler.fit_transform(cluster_base[features])
-                model = KMeans(n_clusters=k, random_state=42, n_init=10)
-                cluster_base["군집"] = model.fit_predict(X) + 1
-                pca = PCA(n_components=2, random_state=42)
-                pcs = pca.fit_transform(X)
-                cluster_base["PCA 1"] = pcs[:,0]
-                cluster_base["PCA 2"] = pcs[:,1]
-                fig = px.scatter(cluster_base, x="PCA 1", y="PCA 2", color=cluster_base["군집"].astype(str),
-                                 hover_name="_도로명", hover_data=features+["기록수"],
-                                 title="도로별 속도 특성 군집 지도(2차원으로 압축해 표시)",
-                                 labels={"color":"군집"}, color_discrete_sequence=px.colors.qualitative.Safe)
-                fig.update_layout(template="plotly_white", height=500, legend_title="군집")
-                st.plotly_chart(fig, use_container_width=True)
-                cluster_summary = cluster_base.groupby("군집").agg(
-                    도로수=("_도로명","count"), 평균속도=("평균속도","mean"),
-                    중앙속도=("중앙속도","mean"), 평균변동=("속도표준편차","mean")
-                ).reset_index().round(2)
-                st.markdown("#### 군집별 특징")
-                st.dataframe(cluster_summary, use_container_width=True, hide_index=True)
-                st.markdown("#### 어떤 도로가 어느 그룹일까?")
-                st.dataframe(cluster_base[["_도로명","군집","평균속도","중앙속도","속도표준편차","기록수"]].sort_values(["군집","평균속도"], ascending=[True,False]).round(2),
-                             use_container_width=True, hide_index=True)
-                st.download_button("⬇️ 군집 결과 CSV 저장", cluster_base.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"), "도로_군집분석.csv", "text/csv")
-                st.caption("PCA 1·2는 여러 속도 특징을 2차원으로 압축한 축이라 실제 도로 위치 좌표가 아니에요. 군집 번호 자체에 우열은 없고, 군집별 평균 속도와 변동을 읽어 의미를 붙여야 해요.")
-    except ImportError:
-        st.error("군집 분석에 필요한 scikit-learn이 설치되지 않았어요. requirements.txt를 다시 설치해 주세요.")
-
-# -------------------- 탭 6 원본 --------------------
-with tabs[5]:
-    st.subheader("🧾 데이터 확인하기")
-    st.write(f"현재 필터 결과 **{len(view):,}행 × {view.shape[1]:,}열**")
-    st.dataframe(view.head(500), use_container_width=True, hide_index=True)
-    st.caption("화면에는 최대 500행을 미리 보여줘요. 전체 데이터는 아래 버튼으로 저장할 수 있어요.")
-    st.download_button("⬇️ 현재 분석 데이터 CSV 저장", view.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"), "분석_데이터.csv", "text/csv")
-    missing_df = pd.DataFrame({
-        "컬럼": raw_df.columns,
-        "결측치 수": [int(raw_df[c].isna().sum()) for c in raw_df.columns],
-        "결측 비율(%)": [round(float(raw_df[c].isna().mean()*100),2) for c in raw_df.columns],
-        "자료형": [str(raw_df[c].dtype) for c in raw_df.columns],
-        "고유값 수": [int(raw_df[c].nunique(dropna=True)) for c in raw_df.columns],
-    })
-    st.markdown("#### 원본 컬럼 점검")
-    st.dataframe(missing_df, use_container_width=True, hide_index=True)
-    st.download_button("⬇️ 컬럼 점검표 CSV 저장", missing_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"), "컬럼_점검표.csv", "text/csv")
-
-st.markdown("---")
-st.markdown("<div style='text-align:center;color:#8293a3;font-size:.85rem'>🚦 도로 소통정보 분석실 · 데이터에서 패턴을 발견하고, 그래프로 설명해 봐요.</div>", unsafe_allow_html=True)
+                        ("cat", categorical_pipe
