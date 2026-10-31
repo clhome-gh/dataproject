@@ -164,6 +164,73 @@ df["_시"] = np.where(valid_time_code, df["_시간코드"] - 1, np.nan)
 df["_시"] = pd.to_numeric(df["_시"], errors="coerce")
 
 def time_group(h):
-    if pd.isna(h): return "시간 정보 없음"
+    if pd.isna(h): 
+        return "시간 정보 없음"
     h = int(h) % 24
-    if 0 <= h <= 5: return "🌙 새벽 (00–0
+    if 0 <= h <= 5: 
+        return "🌙 새벽 (00-05)"
+    if 6 <= h <= 9: 
+        return "🚗 출근 시간 (06-09)"
+    if 10 <= h <= 16: 
+        return "☀️ 낮 시간 (10-16)"
+    if 17 <= h <= 19: 
+        return "🚦 퇴근 시간 (17-19)"
+    return "🌆 밤 시간 (20-23)"
+
+df["_시간대"] = df["_시"].map(time_group)
+df["_도로명"] = df[road_col].astype(str) if road_col else "도로명 정보 없음"
+df["_도로유형"] = df[type_col].astype(str) if type_col else "도로 유형 정보 없음"
+df["_방향"] = df[direction_col].astype(str) if direction_col else "방향 정보 없음"
+
+st.markdown(f'<span class="pill">시간 코드: B열 · {time_col}</span><span class="pill">속도 컬럼: {speed_col}</span><span class="pill">유효 시간 코드: {int(valid_time_code.sum()):,}개</span><span class="pill">유효 속도 데이터: {len(df):,}개</span>', unsafe_allow_html=True)
+
+# -------------------- 필터 --------------------
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🎛️ 데이터 골라보기")
+roads = sorted(df["_도로명"].dropna().unique().tolist())
+if len(roads) > 1 and road_col:
+    selected_roads = st.sidebar.multiselect("도로 선택 (비우면 전체)", roads, default=[])
+else:
+    selected_roads = []
+types = sorted(df["_도로유형"].dropna().unique().tolist())
+selected_types = st.sidebar.multiselect("도로 유형 선택 (비우면 전체)", types, default=[])
+groups = ["🌙 새벽 (00-05)", "🚗 출근 시간 (06-09)", "☀️ 낮 시간 (10-16)", "🚦 퇴근 시간 (17-19)", "🌆 밤 시간 (20-23)", "시간 정보 없음"]
+selected_groups = st.sidebar.multiselect("시간대 선택 (비우면 전체)", groups, default=[])
+
+view = df.copy()
+if selected_roads:
+    view = view[view["_도로명"].isin(selected_roads)]
+if selected_types:
+    view = view[view["_도로유형"].isin(selected_types)]
+if selected_groups:
+    view = view[view["_시간대"].isin(selected_groups)]
+if view.empty:
+    st.warning("선택한 조건에 맞는 데이터가 없어요. 필터를 조금 풀어 주세요.")
+    st.stop()
+
+# -------------------- 상단 지표 --------------------
+st.markdown("## 👀 먼저 데이터 한눈에 보기")
+n = len(view)
+mean_v = view["_속도"].mean()
+median_v = view["_속도"].median()
+std_v = view["_속도"].std()
+missing = int(raw_df.isna().sum().sum())
+dupes = int(raw_df.duplicated().sum())
+c1,c2,c3,c4,c5 = st.columns(5)
+c1.metric("🚘 분석한 기록", f"{n:,}개", f"원본 {len(raw_df):,}개 행")
+c2.metric("평균 속도", f"{mean_v:,.2f}", "속도 단위는 원본 데이터 기준")
+c3.metric("중앙값", f"{median_v:,.2f}", "절반의 값이 이보다 작거나 같아요")
+c4.metric("표준편차", f"{std_v:,.2f}" if pd.notna(std_v) else "계산 불가", "값이 클수록 속도 차이가 큼")
+c5.metric("누락 셀", f"{missing:,}", "원본 전체 기준")
+
+st.markdown('<div class="section-note">💡 <b>읽는 팁:</b> 평균은 전체적인 수준을, 중앙값은 가운데 값을 보여줘요. 평균과 중앙값 차이가 크면 일부 매우 빠르거나 느린 기록의 영향을 받았을 수 있어요. 아래 그래프를 함께 보면서 확인해 보세요.</div>', unsafe_allow_html=True)
+
+tabs = st.tabs(["📌 요약 & 기초통계", "🕒 시간대 패턴", "🛣️ 도로별 비교", "📈 회귀 분석", "🧩 군집 분석", "🧾 원본 데이터"])
+
+# -------------------- 탭 1 --------------------
+with tabs[0]:
+    left,right = st.columns([1.05,1.4], gap="large")
+    with left:
+        st.subheader("기초통계 요약")
+        stats = view["_속도"].describe(percentiles=[.05,.25,.5,.75,.95]).rename({
+            "count":"자료 수", "mean":"평균", "std":"표준편차", "min":"최솟값",
