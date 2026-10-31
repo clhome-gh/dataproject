@@ -363,7 +363,6 @@ with tabs[3]:
         from sklearn.metrics import (r2_score, mean_absolute_error, mean_squared_error,
                                    accuracy_score, precision_score, recall_score,
                                    f1_score, roc_auc_score, confusion_matrix)
-        from plotly.subplots import make_subplots
 
         model_df = view.dropna(subset=["_시", "_속도"]).copy()
         model_df["_시"] = pd.to_numeric(model_df["_시"], errors="coerce")
@@ -477,59 +476,48 @@ with tabs[3]:
                     err_fig.update_layout(template="plotly_white", height=390, xaxis_title="모델", yaxis_title="오차 (km/h)", barmode="group", bargroupgap=0.12)
                     st.plotly_chart(err_fig, use_container_width=True)
 
-                    # 5개 회귀 모델 시각화: 파란색 점 산점도 + 빨간색 회귀 예측선 (시간순 정렬)
-                    st.markdown("#### 5개 회귀 모델별 실제값(산점도)과 회귀 예측선 비교")
-                    st.caption("시간순으로 정렬되어 있으며, 파란색 점은 실제 속도 분포, 빨간색 선은 회귀 모델의 예측선입니다.")
+                    # 🌟 요청하신 단일 통합 산점도 + 회귀선 그래프 형식 (처음 보내주신 첫 번째 이미지 스타일)
+                    st.markdown("#### 🎯 전체 실제값 산점도와 회귀 모델 예측선 비교")
+                    st.caption("x축은 시간(시), y축은 속도(km/h)이며, 파란색 점은 실제 데이터 산점도, 빨간색 선은 선택한 회귀 모델의 예측선입니다[cite: 1].")
                     
-                    compare_frames = []
-                    for model_name, model_pred in regression_predictions.items():
-                        one = pd.DataFrame({
-                            "시간": test_df["_시"].astype(int).to_numpy(),
-                            "실제속도": y_test.to_numpy(),
-                            "예측속도": np.asarray(model_pred, dtype=float)
-                        })
-                        # 시간순 정렬 및 평균 집계
-                        hourly = one.groupby("시간", as_index=False).agg(
-                            실제속도=("실제속도", "mean"),
-                            예측속도=("예측속도", "mean")
-                        ).sort_values("시간")
-                        compare_frames.append((model_name, hourly))
-
-                    n_models = len(compare_frames)
-                    n_cols = 2
-                    n_rows = int(np.ceil(n_models / n_cols))
-                    subplot_titles = [name for name, _ in compare_frames]
+                    selected_vis_model = st.selectbox("비교할 회귀 모델 선택", list(regression_predictions.keys()), key="select_vis_model")
                     
-                    compare_fig = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=subplot_titles,
-                                                  shared_xaxes=True, vertical_spacing=0.14, horizontal_spacing=0.10)
+                    vis_df = pd.DataFrame({
+                        "시간": test_df["_시"].astype(int).to_numpy(),
+                        "실제속도": y_test.to_numpy(),
+                        "예측속도": np.asarray(regression_predictions[selected_vis_model], dtype=float)
+                    }).sort_values("시간")
                     
-                    for idx, (model_name, hourly) in enumerate(compare_frames):
-                        rr, cc = idx // n_cols + 1, idx % n_cols + 1
-                        
-                        # 1. 파란색 산점도 (실제값 점)
-                        compare_fig.add_trace(go.Scatter(
-                            x=hourly["시간"], y=hourly["실제속도"], mode="markers",
-                            name="실제 속도 (산점도)", legendgroup="actual", showlegend=(idx == 0),
-                            marker=dict(color="#1f77b4", size=9)
-                        ), row=rr, col=cc)
-                        
-                        # 2. 빨간색 회귀선 (예측선)
-                        compare_fig.add_trace(go.Scatter(
-                            x=hourly["시간"], y=hourly["예측속도"], mode="lines+markers",
-                            name="회귀 예측선", legendgroup="pred", showlegend=(idx == 0),
-                            line=dict(color="#d62728", width=2.5), marker=dict(size=4)
-                        ), row=rr, col=cc)
-                        
-                        compare_fig.update_xaxes(title_text="시간 (시)", dtick=2, row=rr, col=cc)
-                        compare_fig.update_yaxes(title_text="속도 (km/h)", row=rr, col=cc)
-                        
-                    compare_fig.update_layout(
-                        template="plotly_white", height=max(700, n_rows * 320),
-                        title="회귀 모델별 시간순 실제값(산점도) vs 회귀 예측선",
-                        margin=dict(t=90, b=35), hovermode="x unified",
-                        legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center")
+                    # 시간대별 평균 집계 (부드러운 추세를 위해)
+                    vis_grouped = vis_df.groupby("시간", as_index=False).agg(
+                        실제속도=("실제속도", "mean"),
+                        예측속도=("예측속도", "mean")
                     )
-                    st.plotly_chart(compare_fig, use_container_width=True)
+
+                    fig_single = go.Figure()
+                    # 파란색 산점도 (실제 속도)
+                    fig_single.add_trace(go.Scatter(
+                        x=vis_grouped["시간"], y=vis_grouped["실제속도"], mode="markers",
+                        name="실제 속도 (산점도)",
+                        marker=dict(color="#1f77b4", size=10)
+                    ))
+                    # 빨간색 회귀 예측선
+                    fig_single.add_trace(go.Scatter(
+                        x=vis_grouped["시간"], y=vis_grouped["예측속도"], mode="lines+markers",
+                        name=f"{selected_vis_model} 예측선",
+                        line=dict(color="#d62728", width=3),
+                        marker=dict(size=6)
+                    ))
+                    
+                    fig_single.update_layout(
+                        template="plotly_white",
+                        title=f"[{selected_vis_model}] 시간(x)에 따른 속도(y) 산점도 및 회귀 예측선",
+                        xaxis_title="x data (시간 / 시)",
+                        yaxis_title="y data (속도 / km/h)",
+                        height=480,
+                        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center")
+                    )
+                    st.plotly_chart(fig_single, use_container_width=True)
                     
                     st.download_button("⬇️ 회귀 모델 성능 비교 CSV 저장",
                                        reg_results.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
