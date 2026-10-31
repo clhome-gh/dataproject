@@ -477,9 +477,9 @@ with tabs[3]:
                     err_fig.update_layout(template="plotly_white", height=390, xaxis_title="모델", yaxis_title="오차 (km/h)", barmode="group", bargroupgap=0.12)
                     st.plotly_chart(err_fig, use_container_width=True)
 
-                    # 5개 회귀 모델 시각화 (시간순 정렬 및 파란색 산점도 + 빨간색 회귀선)
-                    st.markdown("#### 5개 회귀 모델별 실제값(산점도)과 예측선(회귀선) 비교")
-                    st.caption("각 그래프는 테스트 날짜의 시간순으로 정렬되어 있으며, 파란색 점은 실제 속도, 빨간색 선은 모델의 회귀 예측선입니다.")
+                    # 5개 회귀 모델 시각화: 파란색 점 산점도 + 빨간색 회귀 예측선 (시간순 정렬)
+                    st.markdown("#### 5개 회귀 모델별 실제값(산점도)과 회귀 예측선 비교")
+                    st.caption("시간순으로 정렬되어 있으며, 파란색 점은 실제 속도 분포, 빨간색 선은 회귀 모델의 예측선입니다.")
                     
                     compare_frames = []
                     for model_name, model_pred in regression_predictions.items():
@@ -488,7 +488,7 @@ with tabs[3]:
                             "실제속도": y_test.to_numpy(),
                             "예측속도": np.asarray(model_pred, dtype=float)
                         })
-                        # 시간순 정렬
+                        # 시간순 정렬 및 평균 집계
                         hourly = one.groupby("시간", as_index=False).agg(
                             실제속도=("실제속도", "mean"),
                             예측속도=("예측속도", "mean")
@@ -505,24 +505,27 @@ with tabs[3]:
                     
                     for idx, (model_name, hourly) in enumerate(compare_frames):
                         rr, cc = idx // n_cols + 1, idx % n_cols + 1
-                        # 파란색 산점도 (실제값)
+                        
+                        # 1. 파란색 산점도 (실제값 점)
                         compare_fig.add_trace(go.Scatter(
                             x=hourly["시간"], y=hourly["실제속도"], mode="markers",
-                            name="실제 속도", legendgroup="actual", showlegend=(idx == 0),
-                            marker=dict(color="#1f77b4", size=8)
+                            name="실제 속도 (산점도)", legendgroup="actual", showlegend=(idx == 0),
+                            marker=dict(color="#1f77b4", size=9)
                         ), row=rr, col=cc)
-                        # 빨간색 회귀선 (예측값)
+                        
+                        # 2. 빨간색 회귀선 (예측선)
                         compare_fig.add_trace(go.Scatter(
                             x=hourly["시간"], y=hourly["예측속도"], mode="lines+markers",
                             name="회귀 예측선", legendgroup="pred", showlegend=(idx == 0),
-                            line=dict(color="#d62728", width=2.5), marker=dict(size=5)
+                            line=dict(color="#d62728", width=2.5), marker=dict(size=4)
                         ), row=rr, col=cc)
+                        
                         compare_fig.update_xaxes(title_text="시간 (시)", dtick=2, row=rr, col=cc)
                         compare_fig.update_yaxes(title_text="속도 (km/h)", row=rr, col=cc)
                         
                     compare_fig.update_layout(
                         template="plotly_white", height=max(700, n_rows * 320),
-                        title="회귀 모델별 시간순 실제값 vs 예측선 비교",
+                        title="회귀 모델별 시간순 실제값(산점도) vs 회귀 예측선",
                         margin=dict(t=90, b=35), hovermode="x unified",
                         legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center")
                     )
