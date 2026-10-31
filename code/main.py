@@ -479,8 +479,8 @@ with tabs[3]:
                     metric_long = reg_results.melt(id_vars="모델", value_vars=["MAE", "RMSE"],
                                                    var_name="평가지표", value_name="오차")
                     err_fig = px.bar(metric_long, x="모델", y="오차", color="평가지표", barmode="group",
-                                     title="회귀 모델별 예측 오차 비교", barmode_groupgap=0.12)
-                    err_fig.update_layout(template="plotly_white", height=390, xaxis_title="모델", yaxis_title="오차 (km/h)")
+                                     title="회귀 모델별 예측 오차 비교")
+                    err_fig.update_layout(template="plotly_white", height=390, xaxis_title="모델", yaxis_title="오차 (km/h)", barmode="group", bargroupgap=0.12)
                     st.plotly_chart(err_fig, use_container_width=True)
 
                     selected_reg = st.selectbox("실제값과 예측값을 비교할 모델", list(regression_predictions.keys()),
