@@ -161,7 +161,18 @@ if df.empty:
     st.stop()
 
 if date_col:
-    df["_날짜"] = pd.to_datetime(df[date_col], errors="coerce")
+    # YYYYMMDD 숫자형 날짜와 일반 날짜 문자열을 모두 처리
+    date_values = df[date_col]
+    if pd.api.types.is_numeric_dtype(date_values):
+        date_text = date_values.astype("Int64").astype(str)
+        df["_날짜"] = pd.to_datetime(date_text, format="%Y%m%d", errors="coerce")
+    else:
+        date_text = date_values.astype(str).str.strip()
+        compact_date = date_text.str.fullmatch(r"\d{8}")
+        parsed = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+        parsed.loc[compact_date] = pd.to_datetime(date_text.loc[compact_date], format="%Y%m%d", errors="coerce")
+        parsed.loc[~compact_date] = pd.to_datetime(date_text.loc[~compact_date], errors="coerce")
+        df["_날짜"] = parsed
 else:
     df["_날짜"] = pd.NaT
 
@@ -342,40 +353,203 @@ with tabs[2]:
         st.plotly_chart(figt, use_container_width=True)
         st.dataframe(type_summary.round(2), use_container_width=True, hide_index=True)
 
-# -------------------- 탭 4 회귀 --------------------
+# -------------------- 탭 4 회귀 및 분류 모델 --------------------
 with tabs[3]:
-    st.subheader("📈 회귀 분석: 시간과 속도에 관계가 있을까?")
-    st.markdown('<div class="section-note">회귀 분석은 한 변수로 다른 변수의 경향을 설명해 보는 방법이에요. 여기서는 <b>시간(시각)</b>과 <b>속도</b>의 관계를 직선으로 살펴봐요. 관계가 있다고 해서 시간만이 속도의 원인이라고 단정할 수는 없어요.</div>', unsafe_allow_html=True)
-    if view["_시"].notna().sum() >= 3 and view["_시"].nunique() >= 2:
-        reg = view.dropna(subset=["_시","_속도"])[["_시","_속도"]].copy()
-        # 24시를 0시로 정규화한 시간 숫자를 이용한 단순 선형 회귀
-        x = reg["_시"].astype(float).to_numpy()
-        y = reg["_속도"].astype(float).to_numpy()
-        slope, intercept = np.polyfit(x, y, 1)
-        pred = slope*x + intercept
-        ss_res = float(np.sum((y-pred)**2))
-        ss_tot = float(np.sum((y-y.mean())**2))
-        r2 = 1 - ss_res/ss_tot if ss_tot else np.nan
-        mae = float(np.mean(np.abs(y-pred)))
-        c1,c2,c3 = st.columns(3)
-        c1.metric("회귀식 기울기", f"{slope:.3f}", "시간 1시간 증가 시 예측 속도의 변화량")
-        c2.metric("결정계수 R²", f"{r2:.3f}", "직선이 속도 차이를 설명하는 정도")
-        c3.metric("평균 절대 오차(MAE)", f"{mae:.2f}", "실제값과 예측값의 평균 차이")
-        # 시간별 평균을 그려 기록이 많은 데이터도 읽기 쉽게 표현
-        hourly_reg = reg.groupby("_시")["_속도"].mean().reset_index()
-        xx = np.linspace(hourly_reg["_시"].min(), hourly_reg["_시"].max(), 100)
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=reg["_시"].sample(min(4000,len(reg)), random_state=4), y=reg["_속도"].sample(min(4000,len(reg)), random_state=4),
-                                 mode="markers", name="개별 기록(최대 4,000개)", marker=dict(color="#9db7c7", size=4, opacity=.3)))
-        fig.add_trace(go.Scatter(x=hourly_reg["_시"], y=hourly_reg["_속도"], mode="markers+lines", name="시간별 평균",
-                                 marker=dict(color="#e78b52", size=8), line=dict(color="#e78b52", width=2)))
-        fig.add_trace(go.Scatter(x=xx, y=slope*xx+intercept, mode="lines", name="선형 회귀선", line=dict(color="#1c7185", width=4)))
-        fig.update_layout(template="plotly_white", title="시간(시각)과 속도의 산점도 및 회귀선", xaxis_title="시간(0~23시)", yaxis_title="속도", height=480)
-        st.plotly_chart(fig, use_container_width=True)
-        st.write(f"**회귀식:** 속도 = {intercept:.3f} + ({slope:.3f} × 시간)")
-        st.caption("R²가 1에 가까울수록 직선 모형이 데이터 변동을 잘 설명하고, 0에 가까울수록 설명력이 낮아요. 하루 시간은 23시 다음에 0시로 이어지는 순환형 값이라 단순 직선 회귀에는 한계가 있어요.")
-    else:
-        st.warning("회귀 분석을 하려면 B열 시간코드에 서로 다른 값이 2개 이상 있어야 해요.")
+    st.subheader("📈 다양한 회귀·분류 모델 비교")
+    st.markdown('<div class="section-note">평균속도를 예측하는 회귀 모델과 혼잡 여부를 분류하는 로지스틱 회귀를 한 화면에서 비교해요. 평가는 날짜 기준으로 학습용과 테스트용을 나눠 진행합니다.</div>', unsafe_allow_html=True)
+
+    try:
+        from sklearn.compose import ColumnTransformer
+        from sklearn.preprocessing import OneHotEncoder, StandardScaler, PolynomialFeatures
+        from sklearn.pipeline import Pipeline
+        from sklearn.impute import SimpleImputer
+        from sklearn.linear_model import LinearRegression, Ridge, Lasso, LogisticRegression
+        from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+        from sklearn.metrics import (r2_score, mean_absolute_error, mean_squared_error,
+                                     accuracy_score, precision_score, recall_score,
+                                     f1_score, roc_auc_score, confusion_matrix)
+        from sklearn.base import clone
+
+        model_df = view.dropna(subset=["_시", "_속도"]).copy()
+        model_df["_시"] = pd.to_numeric(model_df["_시"], errors="coerce")
+        model_df = model_df.dropna(subset=["_시"])
+        model_df["_날짜문자"] = model_df["_날짜"].dt.strftime("%Y-%m-%d")
+        model_df["_요일"] = model_df["_날짜"].dt.dayofweek.astype("Int64").astype(str)
+        model_df["_시간대문자"] = model_df["_시"].astype(int).astype(str)
+
+        if len(model_df) < 30:
+            st.warning("모델 분석에는 유효한 데이터가 최소 30개 이상 필요해요.")
+        else:
+            # 마지막 날짜를 테스트 데이터로 사용해 이후 날짜 예측 상황을 모의
+            available_dates = sorted(model_df["_날짜문자"].dropna().unique().tolist())
+            if len(available_dates) >= 2:
+                test_date = available_dates[-1]
+                train_df = model_df[model_df["_날짜문자"] < test_date].copy()
+                test_df = model_df[model_df["_날짜문자"] == test_date].copy()
+                split_label = f"학습: {', '.join(available_dates[:-1])} / 테스트: {test_date}"
+            else:
+                # 날짜가 없거나 하루뿐이면 시간순 80:20 분할
+                model_df = model_df.sort_values("_시")
+                cut = int(len(model_df) * 0.8)
+                train_df, test_df = model_df.iloc[:cut].copy(), model_df.iloc[cut:].copy()
+                split_label = "날짜 정보가 부족해 시간순 80:20 분할 사용"
+
+            st.caption(f"데이터 분할 방식: {split_label} · 학습 {len(train_df):,}개 / 테스트 {len(test_df):,}개")
+            if len(train_df) < 10 or len(test_df) < 5:
+                st.warning("학습 또는 테스트 데이터가 부족해요. 필터 조건을 넓혀 주세요.")
+            else:
+                # 숫자·범주형 설명변수 구성
+                numeric_features = ["_시"]
+                categorical_features = ["_도로유형", "_방향"]
+                if road_col:
+                    categorical_features.append("_도로명")
+                feature_cols = numeric_features + categorical_features
+                X_train = train_df[feature_cols].copy()
+                X_test = test_df[feature_cols].copy()
+                y_train = train_df["_속도"].astype(float)
+                y_test = test_df["_속도"].astype(float)
+
+                def make_preprocessor(scale_numeric=True):
+                    numeric_steps = [("imputer", SimpleImputer(strategy="median"))]
+                    if scale_numeric:
+                        numeric_steps.append(("scaler", StandardScaler()))
+                    numeric_pipe = Pipeline(numeric_steps)
+                    categorical_pipe = Pipeline([
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
+                        ("onehot", OneHotEncoder(handle_unknown="ignore"))
+                    ])
+                    return ColumnTransformer([
+                        ("num", numeric_pipe, numeric_features),
+                        ("cat", categorical_pipe, categorical_features)
+                    ])
+
+                # 다항회귀는 시간 변수에만 2차항을 적용하고 범주형 변수는 원-핫 인코딩
+                def make_poly_preprocessor():
+                    num_pipe = Pipeline([
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("poly", PolynomialFeatures(degree=2, include_bias=False)),
+                        ("scaler", StandardScaler())
+                    ])
+                    cat_pipe = Pipeline([
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
+                        ("onehot", OneHotEncoder(handle_unknown="ignore"))
+                    ])
+                    return ColumnTransformer([
+                        ("num", num_pipe, numeric_features),
+                        ("cat", cat_pipe, categorical_features)
+                    ])
+
+                regression_models = {
+                    "선형회귀": Pipeline([("prep", make_preprocessor()), ("model", LinearRegression())]),
+                    "2차 다항회귀": Pipeline([("prep", make_poly_preprocessor()), ("model", LinearRegression())]),
+                    "릿지 회귀": Pipeline([("prep", make_preprocessor()), ("model", Ridge(alpha=1.0))]),
+                    "라쏘 회귀": Pipeline([("prep", make_preprocessor()), ("model", Lasso(alpha=0.05, max_iter=5000))]),
+                    "랜덤 포레스트 회귀": Pipeline([("prep", make_preprocessor(scale_numeric=False)),
+                                             ("model", RandomForestRegressor(n_estimators=120, min_samples_leaf=3,
+                                                                              random_state=42, n_jobs=-1))])
+                }
+
+                st.markdown("### ① 평균속도 예측: 회귀 모델 비교")
+                st.caption("종속변수는 평균속도이며, 시간·도로 유형·방향·도로명을 이용해 테스트 날짜의 속도를 예측합니다.")
+                regression_rows = []
+                regression_predictions = {}
+                for name, pipe in regression_models.items():
+                    try:
+                        pipe.fit(X_train, y_train)
+                        pred = pipe.predict(X_test)
+                        regression_predictions[name] = pred
+                        regression_rows.append({
+                            "모델": name,
+                            "R²": r2_score(y_test, pred),
+                            "MAE": mean_absolute_error(y_test, pred),
+                            "RMSE": float(np.sqrt(mean_squared_error(y_test, pred)))
+                        })
+                    except Exception as model_error:
+                        st.warning(f"{name} 실행 중 오류: {model_error}")
+
+                if regression_rows:
+                    reg_results = pd.DataFrame(regression_rows).sort_values("RMSE")
+                    best_reg_name = str(reg_results.iloc[0]["모델"])
+                    best_reg = reg_results.iloc[0]
+                    a,b,c = st.columns(3)
+                    a.metric("RMSE가 가장 낮은 모델", best_reg_name)
+                    b.metric("최고 모델 MAE", f"{best_reg['MAE']:.2f}")
+                    c.metric("최고 모델 R²", f"{best_reg['R²']:.3f}")
+                    st.dataframe(reg_results.round(4), use_container_width=True, hide_index=True)
+                    metric_long = reg_results.melt(id_vars="모델", value_vars=["MAE", "RMSE"],
+                                                   var_name="평가지표", value_name="오차")
+                    err_fig = px.bar(metric_long, x="모델", y="오차", color="평가지표", barmode="group",
+                                     title="회귀 모델별 예측 오차 비교", barmode_groupgap=0.12)
+                    err_fig.update_layout(template="plotly_white", height=390, xaxis_title="모델", yaxis_title="오차 (km/h)")
+                    st.plotly_chart(err_fig, use_container_width=True)
+
+                    selected_reg = st.selectbox("실제값과 예측값을 비교할 모델", list(regression_predictions.keys()),
+                                                index=list(regression_predictions.keys()).index(best_reg_name), key="reg_compare_model")
+                    pred_df = pd.DataFrame({"실제 평균속도": y_test.to_numpy(),
+                                            "예측 평균속도": regression_predictions[selected_reg]})
+                    pred_fig = px.scatter(pred_df, x="실제 평균속도", y="예측 평균속도",
+                                          title=f"{selected_reg}: 실제값과 예측값 비교",
+                                          opacity=0.35)
+                    low = float(min(pred_df.min().min(), 0))
+                    high = float(pred_df.max().max())
+                    pred_fig.add_trace(go.Scatter(x=[low, high], y=[low, high], mode="lines",
+                                                  name="완벽한 예측 기준선", line=dict(dash="dash", color="#e78b52")))
+                    pred_fig.update_layout(template="plotly_white", height=430)
+                    st.plotly_chart(pred_fig, use_container_width=True)
+                    st.download_button("⬇️ 회귀 모델 성능 비교 CSV 저장",
+                                       reg_results.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                                       "회귀모델_성능비교.csv", "text/csv")
+                    st.caption("R²는 높을수록, MAE와 RMSE는 낮을수록 좋아요. 서로 다른 날짜를 테스트했으므로 점수는 해당 데이터 기간에 대한 결과이며 장기 예측 성능을 보장하지 않아요.")
+
+                st.markdown("---")
+                st.markdown("### ② 혼잡 여부 분류: 로지스틱 회귀")
+                st.caption("평균속도 자체가 아니라 설정한 기준보다 느린 도로를 혼잡으로 분류합니다.")
+                threshold = st.slider("혼잡 판정 기준 속도 (km/h 미만이면 혼잡)", 5, 40, 20, 1, key="logistic_threshold")
+                y_train_cls = (y_train < threshold).astype(int)
+                y_test_cls = (y_test < threshold).astype(int)
+                if y_train_cls.nunique() < 2 or y_test_cls.nunique() < 2:
+                    st.warning("현재 분할에서는 혼잡 또는 비혼잡 중 한 종류만 있어 로지스틱 회귀 성능을 계산할 수 없어요.")
+                else:
+                    logistic_pipe = Pipeline([
+                        ("prep", make_preprocessor()),
+                        ("model", LogisticRegression(max_iter=1500, class_weight="balanced"))
+                    ])
+                    logistic_pipe.fit(X_train, y_train_cls)
+                    cls_pred = logistic_pipe.predict(X_test)
+                    cls_prob = logistic_pipe.predict_proba(X_test)[:, 1]
+                    cls_acc = accuracy_score(y_test_cls, cls_pred)
+                    cls_precision = precision_score(y_test_cls, cls_pred, zero_division=0)
+                    cls_recall = recall_score(y_test_cls, cls_pred, zero_division=0)
+                    cls_f1 = f1_score(y_test_cls, cls_pred, zero_division=0)
+                    try:
+                        cls_auc = roc_auc_score(y_test_cls, cls_prob)
+                    except ValueError:
+                        cls_auc = np.nan
+                    c1,c2,c3,c4,c5 = st.columns(5)
+                    c1.metric("정확도", f"{cls_acc:.3f}")
+                    c2.metric("정밀도", f"{cls_precision:.3f}")
+                    c3.metric("재현율", f"{cls_recall:.3f}")
+                    c4.metric("F1 점수", f"{cls_f1:.3f}")
+                    c5.metric("AUC", f"{cls_auc:.3f}" if pd.notna(cls_auc) else "계산 불가")
+                    cm = confusion_matrix(y_test_cls, cls_pred, labels=[0,1])
+                    cm_df = pd.DataFrame(cm, index=["실제 비혼잡", "실제 혼잡"], columns=["예측 비혼잡", "예측 혼잡"])
+                    st.markdown("#### 혼동행렬")
+                    st.dataframe(cm_df, use_container_width=True)
+                    st.caption("정밀도는 혼잡이라고 예측한 기록 중 실제 혼잡 비율, 재현율은 실제 혼잡 기록 중 모델이 찾아낸 비율이에요.")
+                    cls_summary = pd.DataFrame([{
+                        "혼잡 기준(km/h)": threshold, "정확도": cls_acc, "정밀도": cls_precision,
+                        "재현율": cls_recall, "F1": cls_f1, "AUC": cls_auc
+                    }])
+                    st.download_button("⬇️ 로지스틱 회귀 결과 CSV 저장",
+                                       cls_summary.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                                       "로지스틱회귀_성능.csv", "text/csv")
+
+                st.markdown("---")
+                st.markdown("### ③ 분석할 때 주의할 점")
+                st.info("혼잡 기준 속도는 분석자가 정한 값이며 공식 혼잡 판정 기준과 다를 수 있어요. 도로명은 기존 도로의 특성을 학습하는 데 도움이 되지만, 학습에 없던 새로운 도로에 대한 예측에는 그대로 적용하기 어려울 수 있습니다. 또한 현재 데이터는 3일 자료이므로 결과를 장기적인 서울 교통 패턴으로 일반화하지 마세요.")
+
+    except ImportError as e:
+        st.error("회귀·분류 분석에는 scikit-learn이 필요해요. requirements.txt에 scikit-learn을 추가한 뒤 다시 배포해 주세요.")
 
 # -------------------- 탭 5 군집 --------------------
 with tabs[4]:
